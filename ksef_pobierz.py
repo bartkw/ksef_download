@@ -100,6 +100,12 @@ const path = require('path');
 const fs = require('fs');
 const { JSDOM } = require('jsdom');
 
+// Wycisz gadatliwy debug i18next/pdfmake (idzie przez console.*), zanim
+// zaimportujemy bibliotekę. Błędy krytyczne piszemy zachowaną referencją.
+const _err = console.error.bind(console);
+const noop = () => {};
+console.log = noop; console.info = noop; console.warn = noop; console.debug = noop; console.error = noop;
+
 const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', { url: 'http://localhost/' });
 const w = dom.window;
 for (const k of ['window', 'document', 'navigator', 'File', 'Blob', 'FileReader',
@@ -133,8 +139,8 @@ const { generateInvoice } = jiti('./src/index.ts');
     }
   }
   fs.writeFileSync(jobPath + '.result', JSON.stringify({ results }));
-  console.log('DONE ' + results.length);
-})().catch((e) => { console.error('FATAL', (e && e.stack) || e); process.exit(1); });
+  process.stdout.write('DONE ' + results.length + '\n');
+})().catch((e) => { _err('FATAL', (e && e.stack) || e); process.exit(1); });
 '''
 
 # Host weryfikacji QR zależnie od środowiska.
@@ -723,7 +729,8 @@ class PdfRenderer:
             proc = subprocess.run(
                 [self._node, PDF_CLI, "job.json"],
                 cwd=str(self.vendor_dir),
-                capture_output=True, text=True, timeout=max(120, 15 * len(items)),
+                capture_output=True, encoding="utf-8", errors="replace",
+                timeout=max(120, 15 * len(items)),
             )
         finally:
             if job_path.exists():
