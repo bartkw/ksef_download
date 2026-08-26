@@ -1,2 +1,5 @@
 requests>=2.31
 cryptography>=42.0
+
+# Tryb KSEF_FORMAT=pdf NIE wymaga dodatkowych pakietów Pythona — korzysta
+# z oficjalnego generatora MF (Node.js). Instalacja: patrz README, sekcja PDF.

@@ -24,7 +24,9 @@ pip install -r requirements.txt
    - `KSEF_DATE_FROM`, `KSEF_DATE_TO` – zakres dat (opcjonalnie; domyślnie ostatnie 30 dni),
    - `KSEF_DATE_TYPE` – typ daty filtrowania: `Issue` (wystawienia, domyślnie),
      `Invoicing` (przyjęcia w KSeF) lub `PermanentStorage` (trwałego zapisu),
-   - `KSEF_MODE` – tryb pobierania: `single` (domyślnie) lub `export` (patrz niżej).
+   - `KSEF_MODE` – tryb pobierania: `single` (domyślnie) lub `export` (patrz niżej),
+   - `KSEF_FORMAT` – format zapisu: `xml` (oryginał, domyślnie) lub `pdf`
+     (wizualizacja do druku wg oficjalnego arkusza MF; wymaga `lxml` i `weasyprint`).
 
 > ⚠️ Nie commituj pliku `.env` ani tokena do repozytorium.
 
@@ -49,6 +51,38 @@ faktury/
 Miesiąc ustalany jest według wybranego `KSEF_DATE_TYPE` (domyślnie data
 wystawienia). Skrypt pomija faktury już zapisane na dysku (po numerze KSeF),
 więc można go uruchamiać wielokrotnie – działa przyrostowo.
+
+## Format zapisu (`KSEF_FORMAT`)
+
+- **`xml`** (domyślny) – zapisuje oryginalny plik XML faktury.
+- **`pdf`** – generuje **PDF do druku identyczny z tym z Aplikacji Podatnika
+  KSeF**. Faktura KSeF to dokument XML (API nie udostępnia PDF-ów), więc skrypt
+  konwertuje ją **oficjalnym generatorem MF**
+  [`CIRFMF/ksef-pdf-generator`](https://github.com/CIRFMF/ksef-pdf-generator)
+  (ten sam, którego używają wystawcy) uruchamianym lokalnie przez Node.js.
+  Skrypt liczy też link weryfikacyjny QR (`qr.ksef.mf.gov.pl`).
+
+  Pliki zapisywane są jako `{numerKSeF}.pdf`. XML nie jest trzymany: nowe faktury
+  konwertowane są w pamięci, a ewentualny istniejący `{numerKSeF}.xml` (np. z
+  wcześniejszych uruchomień w trybie `xml`) jest usuwany po zapisaniu PDF.
+  Jeśli konwersja pojedynczej faktury się nie powiedzie, skrypt to zgłasza
+  i kontynuuje z pozostałymi.
+
+### Instalacja generatora PDF (jednorazowo)
+
+Tryb `pdf` wymaga **Node.js ≥ 20** oraz sklonowanego generatora MF:
+
+```bash
+# w katalogu projektu:
+git clone https://github.com/CIRFMF/ksef-pdf-generator vendor/ksef-pdf-generator
+cd vendor/ksef-pdf-generator
+npm install
+```
+
+To wszystko — wsadowy konwerter (`convert-cli.cjs`) skrypt sam dopisze do tego
+katalogu przy pierwszym uruchomieniu w trybie `pdf`. Jeśli `node` nie jest w
+`PATH`, wskaż go zmienną `KSEF_NODE` (np. w WSL na Windows:
+`KSEF_NODE="/mnt/c/Program Files/nodejs/node.exe"`).
 
 ## Tryby pobierania (`KSEF_MODE`)
 

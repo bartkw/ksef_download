@@ -2,3 +2,8 @@
 faktury/
 __pycache__/
 *.pyc
+
+# Oficjalny generator PDF (Node) — zależności i pliki robocze
+vendor/ksef-pdf-generator/node_modules/
+vendor/ksef-pdf-generator/job.json
+vendor/ksef-pdf-generator/job.json.result
