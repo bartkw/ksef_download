@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:ksef-test.mf.gov.pl)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python3 -m py_compile ksef_pobierz.py)",
+      "Bash(python3 *)"
+    ]
+  }
+}

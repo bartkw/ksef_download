@@ -1,0 +1,4 @@
+.env
+faktury/
+__pycache__/
+*.pyc
