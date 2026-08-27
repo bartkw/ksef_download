@@ -27,7 +27,12 @@ i pracę przyrostową.
 
 ## Instalacja
 
-**Szybko (macOS / Linux)** — jednym poleceniem:
+Skrypt działa tak samo na macOS, Linux i Windows. Różni się tylko sposób
+instalacji zależności.
+
+### macOS / Linux
+
+Jednym poleceniem:
 
 ```bash
 bash setup.sh
@@ -46,15 +51,46 @@ bash setup.sh
 5. tworzy `.env` z `env.example.txt` (istniejącego nie nadpisuje),
 6. robi self-check (moduł się ładuje, Node wykryty, generator gotowy).
 
-Po zakończeniu uzupełnij `.env` (i/lub `firmy.json`) i uruchom skrypt.
-Bez Node.js tryb `pdf` nie zadziała, ale tryb `xml` owszem.
+Node dla trybu `pdf`: `brew install node` (macOS) lub menedżer pakietów / nvm
+(Linux). Jeśli `node` jest poza `PATH`, wskaż go zmienną `KSEF_NODE=/ścieżka/do/node`.
 
-**Ręcznie:**
+### Windows
 
-```bash
-pip install -r requirements.txt
-# dla KSEF_FORMAT=pdf dodatkowo: Node.js + generator (patrz „Format zapisu")
+Najszybciej — skryptem PowerShell (odpowiednik `setup.sh`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
+
+`setup.ps1` robi to samo co `setup.sh`: sprawdza Pythona i Node, instaluje
+zależności (`requests`, `cryptography`, `pypdf`), klonuje generator PDF
+i uruchamia `npm install`, tworzy `.env` i wykonuje self-check. Node dla trybu
+`pdf` zainstaluj wcześniej z <https://nodejs.org> (≥ 20).
+
+**Ręcznie** (jeśli wolisz):
+
+1. Zależności Pythona:
+   ```
+   pip install -r requirements.txt
+   ```
+2. Skopiuj konfigurację:
+   ```
+   copy env.example.txt .env
+   ```
+   (opcjonalnie wiele firm: `copy firmy.example.json firmy.json`)
+3. **Tylko dla `KSEF_FORMAT=pdf`** — Node.js + generator MF:
+   - zainstaluj Node.js ≥ 20 z <https://nodejs.org> (instalator dodaje `node` do `PATH`),
+   - w katalogu projektu:
+     ```
+     git clone https://github.com/CIRFMF/ksef-pdf-generator vendor\ksef-pdf-generator
+     cd vendor\ksef-pdf-generator
+     npm install
+     ```
+
+> Zamiast `setup.ps1` możesz też uruchomić `bash setup.sh` w **WSL** lub **Git Bash**.
+
+Po instalacji uzupełnij `.env` (i/lub `firmy.json`) i uruchom
+`python ksef_pobierz.py`. Bez Node.js tryb `pdf` nie zadziała, ale `xml` owszem.
 
 ## Konfiguracja
 
@@ -161,29 +197,16 @@ Ustawiany przez `KSEF_FORMAT`:
   Jeśli konwersja pojedynczej faktury się nie powiedzie, skrypt to zgłasza
   i kontynuuje z pozostałymi.
 
-### Instalacja generatora PDF (jednorazowo, na każdej maszynie)
+### Generator PDF
 
-Tryb `pdf` wymaga **Node.js ≥ 20** oraz sklonowanego generatora MF:
+Instalację generatora (Node.js ≥ 20 + `npm install`) opisuje sekcja
+[Instalacja](#instalacja) — osobno dla macOS/Linux i Windows. Wsadowy konwerter
+(`convert-cli.cjs`) skrypt sam dopisze do `vendor/ksef-pdf-generator/` przy
+pierwszym uruchomieniu w trybie `pdf`.
 
-```bash
-# w katalogu projektu:
-git clone https://github.com/CIRFMF/ksef-pdf-generator vendor/ksef-pdf-generator
-cd vendor/ksef-pdf-generator
-npm install
-```
-
-To wszystko — wsadowy konwerter (`convert-cli.cjs`) skrypt sam dopisze do tego
-katalogu przy pierwszym uruchomieniu w trybie `pdf`.
-
-> **Ważne przy przenoszeniu między systemami (np. Windows ↔ macOS):**
-> katalog `node_modules` jest zależny od systemu. Nie kopiuj go między
-> maszynami — na nowym komputerze wejdź do `vendor/ksef-pdf-generator/`
-> i uruchom `npm install` jeszcze raz (jest w `.gitignore`).
-
-**macOS:** zainstaluj Node przez Homebrew (`brew install node`) — skrypt sam go
-znajdzie (Apple Silicon `/opt/homebrew`, Intel `/usr/local`). Jeśli `node` nie
-jest w `PATH`, wskaż go zmienną `KSEF_NODE=/ścieżka/do/node`. Najprościej:
-`bash setup.sh` zrobi to wszystko.
+> **Przy przenoszeniu między systemami (Windows ↔ macOS):** `node_modules` jest
+> zależny od systemu — na nowej maszynie uruchom `npm install` ponownie
+> (jest w `.gitignore`, więc i tak nie trafia do repo).
 
 ## Tryby pobierania (single / export)
 

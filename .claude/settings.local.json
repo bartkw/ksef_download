@@ -39,7 +39,8 @@
       "Bash(chmod +x setup.sh)",
       "Bash(bash setup.sh)",
       "Bash(KSEF_TOKEN='20260826-EC-3A350EA000-4B09959FF5-72|nip-8792408754|f6ccf9fb06264ba7856cf36bccdf018a5ccdb6204fa249c7a33c3463826ef794' KSEF_NIP=8792408754 KSEF_ENV=demo KSEF_FIRMA_NAZWA='Test Stan' KSEF_FORMAT=xml KSEF_MODE=single timeout 90 python3 ksef_pobierz.py --od-ostatniego)",
-      "Bash(KSEF_TOKEN='20260826-EC-3A350EA000-4B09959FF5-72|nip-8792408754|f6ccf9fb06264ba7856cf36bccdf018a5ccdb6204fa249c7a33c3463826ef794' KSEF_NIP=8792408754 KSEF_ENV=demo KSEF_FIRMA_NAZWA='Test Stan' KSEF_FORMAT=xml KSEF_MODE=single timeout 90 python3 ksef_pobierz.py --quiet --od-ostatniego)"
+      "Bash(KSEF_TOKEN='20260826-EC-3A350EA000-4B09959FF5-72|nip-8792408754|f6ccf9fb06264ba7856cf36bccdf018a5ccdb6204fa249c7a33c3463826ef794' KSEF_NIP=8792408754 KSEF_ENV=demo KSEF_FIRMA_NAZWA='Test Stan' KSEF_FORMAT=xml KSEF_MODE=single timeout 90 python3 ksef_pobierz.py --quiet --od-ostatniego)",
+      "Bash(git check-attr *)"
     ]
   }
 }
