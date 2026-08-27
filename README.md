@@ -10,8 +10,33 @@ Systemu e-Faktur (KSeF 2.0) przy użyciu **tokena KSeF**.
 
 ## Instalacja
 
+**Szybko (macOS / Linux)** — jednym poleceniem:
+
+```bash
+bash setup.sh
+```
+
+`setup.sh` wykonuje kolejno:
+
+1. sprawdza `python3` (3.10+),
+2. instaluje zależności Pythona (`requests`, `cryptography`) — z fallbackami
+   dla środowisk „externally-managed" (`--user` / `--break-system-packages`,
+   a w ostateczności podpowiada `venv`),
+3. wykrywa Node.js (Homebrew Apple Silicon `/opt/homebrew`, Intel `/usr/local`,
+   `PATH`, nvm) — wymagany tylko dla `KSEF_FORMAT=pdf`,
+4. klonuje generator PDF `CIRFMF/ksef-pdf-generator` (jeśli go brak)
+   i uruchamia `npm install` **na tej maszynie**,
+5. tworzy `.env` z `env.example.txt` (istniejącego nie nadpisuje),
+6. robi self-check (moduł się ładuje, Node wykryty, generator gotowy).
+
+Po zakończeniu uzupełnij `.env` (`KSEF_TOKEN`, `KSEF_NIP`) i uruchom skrypt.
+Bez Node.js tryb `pdf` nie zadziała, ale tryb `xml` owszem.
+
+**Ręcznie:**
+
 ```bash
 pip install -r requirements.txt
+# dla KSEF_FORMAT=pdf dodatkowo: Node.js + generator (patrz sekcja „Format zapisu")
 ```
 
 ## Konfiguracja
@@ -26,7 +51,8 @@ pip install -r requirements.txt
      `Invoicing` (przyjęcia w KSeF) lub `PermanentStorage` (trwałego zapisu),
    - `KSEF_MODE` – tryb pobierania: `single` (domyślnie) lub `export` (patrz niżej),
    - `KSEF_FORMAT` – format zapisu: `xml` (oryginał, domyślnie) lub `pdf`
-     (wizualizacja do druku wg oficjalnego arkusza MF; wymaga `lxml` i `weasyprint`).
+     (wizualizacja do druku oficjalnym generatorem MF; wymaga Node.js + generatora
+     — patrz sekcja „Format zapisu", instaluje `setup.sh`).
 
 > ⚠️ Nie commituj pliku `.env` ani tokena do repozytorium.
 
@@ -68,7 +94,7 @@ więc można go uruchamiać wielokrotnie – działa przyrostowo.
   Jeśli konwersja pojedynczej faktury się nie powiedzie, skrypt to zgłasza
   i kontynuuje z pozostałymi.
 
-### Instalacja generatora PDF (jednorazowo)
+### Instalacja generatora PDF (jednorazowo, na każdej maszynie)
 
 Tryb `pdf` wymaga **Node.js ≥ 20** oraz sklonowanego generatora MF:
 
@@ -80,9 +106,18 @@ npm install
 ```
 
 To wszystko — wsadowy konwerter (`convert-cli.cjs`) skrypt sam dopisze do tego
-katalogu przy pierwszym uruchomieniu w trybie `pdf`. Jeśli `node` nie jest w
-`PATH`, wskaż go zmienną `KSEF_NODE` (np. w WSL na Windows:
-`KSEF_NODE="/mnt/c/Program Files/nodejs/node.exe"`).
+katalogu przy pierwszym uruchomieniu w trybie `pdf`.
+
+> **Ważne przy przenoszeniu między systemami (np. Windows ↔ macOS):**
+> katalog `node_modules` jest zależny od systemu. Nie kopiuj go między
+> maszynami — na nowym komputerze wejdź do `vendor/ksef-pdf-generator/`
+> i uruchom `npm install` jeszcze raz (jest w `.gitignore`, więc i tak nie
+> trafi do repo).
+
+**macOS:** zainstaluj Node przez Homebrew (`brew install node`) — skrypt sam go
+znajdzie (Apple Silicon `/opt/homebrew`, Intel `/usr/local`). Zależności Pythona:
+`pip3 install requests cryptography`. Uruchomienie: `python3 ksef_pobierz.py`.
+Jeśli `node` nie jest w `PATH`, wskaż go zmienną `KSEF_NODE=/ścieżka/do/node`.
 
 ## Tryby pobierania (`KSEF_MODE`)
 

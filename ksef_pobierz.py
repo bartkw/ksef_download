@@ -648,15 +648,25 @@ class KsefClient:
 # --------------------------------------------------------------------------- #
 
 def _find_node() -> "str | None":
-    """Znajduje interpreter Node (Linux w PATH, ewentualnie instalacja Windows z WSL)."""
+    """Znajduje interpreter Node: KSEF_NODE, potem PATH, potem typowe lokalizacje.
+
+    Obejmuje macOS (Homebrew: Apple Silicon /opt/homebrew, Intel /usr/local),
+    Linux oraz instalację Windows widoczną z WSL.
+    """
     override = os.environ.get("KSEF_NODE")
     if override:
         return override
     found = shutil.which("node")
     if found:
         return found
-    for cand in ("/mnt/c/Program Files/nodejs/node.exe",
-                 "/mnt/c/Program Files (x86)/nodejs/node.exe"):
+    for cand in (
+        "/opt/homebrew/bin/node",              # macOS (Apple Silicon, Homebrew)
+        "/usr/local/bin/node",                 # macOS (Intel) / Linux
+        "/usr/bin/node",                       # Linux
+        f"{os.path.expanduser('~')}/.nvm/current/bin/node",  # nvm
+        "/mnt/c/Program Files/nodejs/node.exe",              # Windows z WSL
+        "/mnt/c/Program Files (x86)/nodejs/node.exe",
+    ):
         if Path(cand).exists():
             return cand
     return None

@@ -34,7 +34,10 @@
       "Bash(git clone *)",
       "Bash(\"/mnt/c/Program Files/nodejs/npm\" install --no-audit --no-fund)",
       "Bash(timeout 300 \"/mnt/c/Program Files/nodejs/npx\" vitest run src/_convert.spec.ts)",
-      "Bash(grep -vE \"^\\\\s*$\")"
+      "Bash(grep -vE \"^\\\\s*$\")",
+      "Bash(bash -n setup.sh)",
+      "Bash(chmod +x setup.sh)",
+      "Bash(bash setup.sh)"
     ]
   }
 }
