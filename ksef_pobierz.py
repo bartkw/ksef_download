@@ -21,6 +21,7 @@ Wszystkie miejsca do ewentualnej korekty są zebrane w sekcji KONFIGURACJA.
 """
 
 import base64
+import csv
 import hashlib
 import io
 import json
@@ -33,6 +34,7 @@ import tarfile
 import time
 import zipfile
 from calendar import monthrange
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -248,6 +250,149 @@ def remove_sibling_xml(pdf_dest: Path) -> None:
             log(f"    nie udało się usunąć {xml.name}: {e}")
 
 
+# --------------------------------------------------------------------------- #
+# ZESTAWIENIA / PODSUMOWANIA
+# --------------------------------------------------------------------------- #
+
+# Kolumny rejestru CSV: (klucz w rekordzie, nagłówek w pliku).
+CSV_COLUMNS = [
+    ("typ", "Typ"),
+    ("ksef", "Numer KSeF"),
+    ("numer", "Numer faktury"),
+    ("data_wystawienia", "Data wystawienia"),
+    ("sprzedawca_nip", "NIP sprzedawcy"),
+    ("sprzedawca_nazwa", "Sprzedawca"),
+    ("nabywca_nip", "NIP nabywcy"),
+    ("nabywca_nazwa", "Nabywca"),
+    ("netto", "Netto"),
+    ("vat", "VAT"),
+    ("brutto", "Brutto"),
+    ("waluta", "Waluta"),
+]
+
+
+def invoice_record(item: dict, typ: str, date_type: str) -> dict:
+    """Buduje rekord faktury z metadanych (do CSV, podsumowań i pobierania)."""
+    seller = item.get("seller") or {}
+    buyer = item.get("buyer") or {}
+    bid = buyer.get("identifier") or {}
+    ksef = item.get("ksefNumber") or item.get("KsefNumber") or item.get("ksefReferenceNumber") or ""
+    month = month_from_meta(item, date_type)
+    if month == UNKNOWN_MONTH and ksef:
+        month = month_from_ksef(ksef)
+    return {
+        "typ": typ,
+        "ksef": ksef,
+        "miesiac": month,
+        "numer": item.get("invoiceNumber") or "",
+        "data_wystawienia": item.get("issueDate") or "",
+        "sprzedawca_nip": seller.get("nip") or "",
+        "sprzedawca_nazwa": seller.get("name") or "",
+        "nabywca_nip": bid.get("value") or buyer.get("nip") or "",
+        "nabywca_nazwa": buyer.get("name") or "",
+        "netto": item.get("netAmount"),
+        "vat": item.get("vatAmount"),
+        "brutto": item.get("grossAmount"),
+        "waluta": item.get("currency") or "",
+    }
+
+
+def _fmt_amount(v) -> str:
+    """Kwota z przecinkiem dziesiętnym (format PL, wygodny w Excelu)."""
+    if v is None or v == "":
+        return ""
+    try:
+        return f"{float(v):.2f}".replace(".", ",")
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _csv_row(rec: dict) -> dict:
+    row = {}
+    for key, label in CSV_COLUMNS:
+        val = rec.get(key)
+        row[label] = _fmt_amount(val) if key in ("netto", "vat", "brutto") else (val or "")
+    return row
+
+
+def write_registry(company_dir: Path, records: list) -> None:
+    """Zapisuje rejestr CSV per miesiąc (rejestr_YYYY-MM.csv), scalając po numerze KSeF."""
+    if not records:
+        return
+    labels = [label for _, label in CSV_COLUMNS]
+    by_month = defaultdict(list)
+    for r in records:
+        by_month[r["miesiac"]].append(r)
+    for month, recs in by_month.items():
+        path = company_dir / f"rejestr_{month}.csv"
+        rows = {}
+        if path.exists():
+            with open(path, encoding="utf-8-sig", newline="") as f:
+                for row in csv.DictReader(f, delimiter=";"):
+                    rows[row.get("Numer KSeF", "")] = row
+        for r in recs:
+            rows[r["ksef"]] = _csv_row(r)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=labels, delimiter=";")
+            w.writeheader()
+            for key in sorted(rows, key=lambda k: (rows[k].get("Data wystawienia", ""), k)):
+                w.writerow(rows[key])
+        log(f"  rejestr: {path.name} ({len(rows)} faktur)")
+
+
+def log_summary(records: list) -> None:
+    """Wypisuje sumy netto/VAT/brutto osobno dla sprzedaży i zakupu."""
+    if not records:
+        return
+    agg = {}
+    for r in records:
+        a = agg.setdefault(r["typ"], {"n": 0, "netto": 0.0, "vat": 0.0, "brutto": 0.0, "waluta": r.get("waluta") or "PLN"})
+        a["n"] += 1
+        for k in ("netto", "vat", "brutto"):
+            try:
+                a[k] += float(r.get(k) or 0)
+            except (TypeError, ValueError):
+                pass
+    for typ in ("sprzedaz", "zakup"):
+        if typ in agg:
+            a = agg[typ]
+            log(f"  {typ}: {a['n']} faktur | netto {a['netto']:.2f} | "
+                f"VAT {a['vat']:.2f} | brutto {a['brutto']:.2f} {a['waluta']}")
+
+
+def merge_month_pdfs(company_dir: Path, records: list) -> None:
+    """Scala PDF-y każdego miesiąca w jeden plik do druku: _do_druku/<typ>_<miesiac>.pdf."""
+    pairs = sorted({(r["typ"], r["miesiac"]) for r in records})
+    if not pairs:
+        return
+    try:
+        from pypdf import PdfWriter
+    except ImportError:
+        log("  (scalony PDF pominięty — zainstaluj: pip install pypdf)")
+        return
+    out_root = company_dir / "_do_druku"
+    for typ, month in pairs:
+        src_dir = company_dir / typ / month
+        if not src_dir.exists():
+            continue
+        pdfs = sorted(p for p in src_dir.glob("*.pdf"))
+        if not pdfs:
+            continue
+        out_root.mkdir(parents=True, exist_ok=True)
+        writer = PdfWriter()
+        for p in pdfs:
+            try:
+                writer.append(str(p))
+            except Exception as e:
+                log(f"    pominięto w scalaniu {p.name}: {e}")
+        dest = out_root / f"{typ}_{month}.pdf"
+        with open(dest, "wb") as f:
+            writer.write(f)
+        writer.close()
+        log(f"  scalony PDF: _do_druku/{dest.name} ({len(pdfs)} faktur)")
+
+
 def rsa_oaep_encrypt(public_key, data: bytes) -> bytes:
     """Szyfruje dane kluczem publicznym MF (RSA-OAEP SHA-256)."""
     return public_key.encrypt(
@@ -268,27 +413,15 @@ def aes_cbc_decrypt(key: bytes, iv: bytes, ciphertext: bytes) -> bytes:
     return unpadder.update(padded) + unpadder.finalize()
 
 
-def _month_map_from_metadata(raw: bytes, date_type: str) -> dict:
-    """Buduje mapę {ksefNumber: 'YYYY-MM'} z pliku _metadata.json paczki."""
-    mapping = {}
-    try:
-        meta = json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return mapping
-    for inv in meta.get("invoices", []):
-        num = inv.get("ksefNumber")
-        if num:
-            mapping[num] = month_from_meta(inv, date_type)
-    return mapping
-
-
 def extract_invoices(data: bytes, out_dir: Path, date_type: str = DEFAULT_DATE_TYPE,
-                     fmt: str = DEFAULT_FORMAT, renderer: "PdfRenderer | None" = None) -> int:
+                     fmt: str = DEFAULT_FORMAT, renderer: "PdfRenderer | None" = None,
+                     typ: str = "") -> tuple:
     """Rozpakowuje odszyfrowaną paczkę (ZIP lub TarGz) i zapisuje faktury.
 
     Faktury trafiają do podfolderów miesięcznych 'YYYY-MM' (wg _metadata.json,
     a gdy go brak — wg daty z numeru KSeF). Format 'xml' zapisuje oryginał,
-    'pdf' konwertuje wizualizacją MF. Zwraca liczbę NOWO zapisanych faktur.
+    'pdf' konwertuje wizualizacją MF.
+    Zwraca (liczba_nowych, rekordy) — rekordy z metadanych paczki (do CSV/podsumowań).
     """
     # Najpierw wczytaj całą zawartość paczki do pamięci (żeby najpierw poznać
     # _metadata.json, niezależnie od kolejności plików w archiwum).
@@ -305,10 +438,19 @@ def extract_invoices(data: bytes, out_dir: Path, date_type: str = DEFAULT_DATE_T
                 if member.isfile():
                     entries[member.name] = tf.extractfile(member).read()
 
+    records = []
     month_map = {}
     for name, raw in entries.items():
         if os.path.basename(name).lower() == "_metadata.json":
-            month_map = _month_map_from_metadata(raw, date_type)
+            try:
+                meta = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                meta = {}
+            for it in meta.get("invoices", []):
+                rec = invoice_record(it, typ, date_type)
+                if rec["ksef"]:
+                    records.append(rec)
+                    month_map[rec["ksef"]] = rec["miesiac"]
             break
 
     ext = "pdf" if fmt == "pdf" else "xml"
@@ -348,7 +490,7 @@ def extract_invoices(data: bytes, out_dir: Path, date_type: str = DEFAULT_DATE_T
             dest.write_bytes(content)
             new += 1
             log(f"    zapisano {month}/{dest.name}")
-    return new
+    return new, records
 
 
 # --------------------------------------------------------------------------- #
@@ -510,13 +652,14 @@ class KsefClient:
 
     # -- pobieranie faktur ---------------------------------------------------
 
-    def query_ksef_numbers(self, subject_type: str, date_from: str, date_to: str,
+    def query_ksef_numbers(self, subject_type: str, typ: str, date_from: str, date_to: str,
                            date_type: str = DEFAULT_DATE_TYPE) -> list:
-        """Zwraca listę faktur (num, folder_miesiąca) dla typu podmiotu i zakresu dat.
+        """Zwraca listę rekordów faktur (pełne metadane) dla podmiotu i zakresu dat.
 
         Zakres dat dzielony jest na okna < 3 mies. (limit KSeF), a wyniki
         deduplikowane (na styku okien faktura mogłaby wystąpić dwa razy).
-        Folder miesiąca ('YYYY-MM') liczony wg wybranego date_type.
+        Każdy rekord ma m.in. 'ksef', 'miesiac' (YYYY-MM), kontrahenta i kwoty.
+        typ = 'sprzedaz' | 'zakup'.
         """
         seen: set[str] = set()
         invoices: list = []
@@ -541,10 +684,7 @@ class KsefClient:
                     num = it.get("ksefNumber") or it.get("KsefNumber") or it.get("ksefReferenceNumber")
                     if num and num not in seen:
                         seen.add(num)
-                        month = month_from_meta(it, date_type)
-                        if month == UNKNOWN_MONTH:
-                            month = month_from_ksef(num)
-                        invoices.append((num, month))
+                        invoices.append(invoice_record(it, typ, date_type))
                 got = len(items)
                 log(f"    strona offset={offset}, pobrano {got} pozycji")
                 has_more = r.get("hasMore")
@@ -617,14 +757,15 @@ class KsefClient:
 
     def download_package(self, package: dict, aes_key: bytes, iv: bytes, out_dir: Path,
                          date_type: str = DEFAULT_DATE_TYPE,
-                         fmt: str = DEFAULT_FORMAT, renderer: "PdfRenderer | None" = None) -> int:
+                         fmt: str = DEFAULT_FORMAT, renderer: "PdfRenderer | None" = None,
+                         typ: str = "") -> tuple:
         """Pobiera części paczki, weryfikuje, odszyfrowuje i rozpakowuje faktury.
 
-        Zwraca liczbę nowo zapisanych faktur.
+        Zwraca (liczba_nowych, rekordy).
         """
         parts = sorted(package.get("parts", []), key=lambda p: p.get("ordinalNumber", 0))
         if not parts:
-            return 0
+            return 0, []
         blob = bytearray()
         for p in parts:
             name = p.get("partName")
@@ -641,7 +782,7 @@ class KsefClient:
                     sys.exit(f"[BŁĄD] Niezgodny skrót zaszyfrowanej części {name}.")
             blob.extend(data)
         plaintext = aes_cbc_decrypt(aes_key, iv, bytes(blob))
-        return extract_invoices(plaintext, out_dir, date_type, fmt, renderer)
+        return extract_invoices(plaintext, out_dir, date_type, fmt, renderer, typ)
 
 
 # --------------------------------------------------------------------------- #
@@ -790,20 +931,23 @@ def run_single(client: "KsefClient", out_dir: Path, date_from: str, date_to: str
                fmt: str = DEFAULT_FORMAT, renderer: "PdfRenderer | None" = None):
     """Tryb pojedynczy: metadane -> pobieranie faktura po fakturze.
 
-    Zwraca (liczba_znalezionych, liczba_nowych).
+    Zwraca (liczba_znalezionych, liczba_nowych, rekordy).
     """
     ext = "pdf" if fmt == "pdf" else "xml"
     total_found = 0
     total_new = 0
+    records: list = []
     for folder, subject in ZADANIA:
         out = out_dir / folder
         out.mkdir(parents=True, exist_ok=True)
         log(f"== Faktury: {folder} ==")
-        invoices = retry(lambda s=subject: client.query_ksef_numbers(s, date_from, date_to, date_type))
+        invoices = retry(lambda s=subject, t=folder: client.query_ksef_numbers(s, t, date_from, date_to, date_type))
+        records.extend(invoices)
         total_found += len(invoices)
         log(f"Znaleziono {len(invoices)} faktur ({folder}).")
         pdf_jobs = []  # (num, dest, rel, xml_bytes) — do wsadowej konwersji PDF
-        for i, (num, month) in enumerate(invoices, 1):
+        for i, rec in enumerate(invoices, 1):
+            num, month = rec["ksef"], rec["miesiac"]
             month_dir = out / month
             month_dir.mkdir(parents=True, exist_ok=True)
             dest = month_dir / f"{num}.{ext}"
@@ -833,17 +977,18 @@ def run_single(client: "KsefClient", out_dir: Path, date_from: str, date_to: str
                 remove_sibling_xml(dest)
                 total_new += 1
                 log(f"    zapisano {rel}")
-    return total_found, total_new
+    return total_found, total_new, records
 
 
 def run_export(client: "KsefClient", out_dir: Path, date_from: str, date_to: str, date_type: str,
                fmt: str = DEFAULT_FORMAT, renderer: "PdfRenderer | None" = None):
     """Tryb eksportu: asynchroniczna, zaszyfrowana paczka ZIP na okno dat.
 
-    Zwraca (liczba_znalezionych, liczba_nowych).
+    Zwraca (liczba_znalezionych, liczba_nowych, rekordy).
     """
     total_found = 0
     total_new = 0
+    records: list = []
     for folder, subject in ZADANIA:
         out = out_dir / folder
         out.mkdir(parents=True, exist_ok=True)
@@ -861,10 +1006,12 @@ def run_export(client: "KsefClient", out_dir: Path, date_from: str, date_to: str
                 log("  UWAGA: paczka ucięta (limit 10000 faktur / rozmiaru) — "
                     "zawęź zakres dat, część faktur mogła zostać pominięta.")
             if count:
-                total_new += retry(
-                    lambda pkg=package, k=aes_key, v=iv, o=out:
-                    client.download_package(pkg, k, v, o, date_type, fmt, renderer))
-    return total_found, total_new
+                new, recs = retry(
+                    lambda pkg=package, k=aes_key, v=iv, o=out, t=folder:
+                    client.download_package(pkg, k, v, o, date_type, fmt, renderer, t))
+                total_new += new
+                records.extend(recs)
+    return total_found, total_new, records
 
 
 def load_companies(here: Path) -> list:
@@ -905,32 +1052,37 @@ def load_companies(here: Path) -> list:
              "albo uzupełnij KSEF_TOKEN i KSEF_NIP w .env.")
 
 
-def choose_company(companies: list) -> dict:
-    """Wybór firmy: przez KSEF_FIRMA (numer/nazwa), automatycznie gdy jedna,
-    inaczej interaktywne menu."""
+def choose_companies(companies: list) -> list:
+    """Zwraca listę firm do przetworzenia: przez KSEF_FIRMA (numer/nazwa/'all'),
+    automatycznie gdy jedna, inaczej interaktywne menu (z opcją 'wszystkie')."""
     pre = os.environ.get("KSEF_FIRMA", "").strip()
     if pre:
+        if pre.lower() in ("all", "wszystkie", "*", "0"):
+            return list(companies)
         if pre.isdigit() and 1 <= int(pre) <= len(companies):
-            return companies[int(pre) - 1]
+            return [companies[int(pre) - 1]]
         for c in companies:
             if c["nazwa"].lower() == pre.lower():
-                return c
+                return [c]
         for c in companies:
             if pre.lower() in c["nazwa"].lower():
-                return c
+                return [c]
         sys.exit(f"[BŁĄD] Nie znaleziono firmy pasującej do KSEF_FIRMA={pre!r}.")
     if len(companies) == 1:
-        return companies[0]
+        return [companies[0]]
     if not sys.stdin.isatty():
         sys.exit("[BŁĄD] Wiele firm w konfiguracji — wskaż firmę zmienną KSEF_FIRMA "
-                 "(numer lub nazwa).")
+                 "(numer, nazwa lub 'all').")
     print("Wybierz firmę:")
     for i, c in enumerate(companies, 1):
         print(f"  {i}) {c['nazwa']}  (NIP {c['nip']}, {c['env']})")
+    print("  0) Wszystkie firmy")
     while True:
         s = input("Numer firmy: ").strip()
+        if s == "0":
+            return list(companies)
         if s.isdigit() and 1 <= int(s) <= len(companies):
-            return companies[int(s) - 1]
+            return [companies[int(s) - 1]]
         print("Niepoprawny numer — spróbuj ponownie.")
 
 
@@ -967,6 +1119,47 @@ def company_slug(name: str) -> str:
     return s or "firma"
 
 
+def process_company(company: dict, date_from: str, date_to: str, date_type: str,
+                    mode: str, fmt: str) -> tuple:
+    """Przetwarza jedną firmę: pobiera faktury, zapisuje rejestr CSV, scala PDF-y,
+    wypisuje podsumowanie. Zwraca (znalezione, nowe)."""
+    env = company["env"]
+    if env not in BASE_URLS:
+        sys.exit(f"[BŁĄD] Nieznane środowisko '{env}' dla firmy {company['nazwa']}. "
+                 f"Dozwolone: {list(BASE_URLS)}")
+    base_url = BASE_URLS[env]
+    out_dir = FAKTURY_DIR / company_slug(company["nazwa"])
+    renderer = PdfRenderer(env) if fmt == "pdf" else None
+
+    log("=" * 60)
+    log(f"Firma: {company['nazwa']} (NIP {company['nip']}) | środowisko: {env}")
+    log(f"Zakres dat: {date_from} .. {date_to} | dateType: {date_type} "
+        f"| tryb: {mode} | format: {fmt}")
+
+    client = KsefClient(base_url, company["nip"], company["token"])
+    retry(client.authenticate)
+
+    if mode in MODES_EXPORT:
+        total_found, total_new, records = run_export(
+            client, out_dir, date_from, date_to, date_type, fmt, renderer)
+    else:
+        total_found, total_new, records = run_single(
+            client, out_dir, date_from, date_to, date_type, fmt, renderer)
+
+    write_registry(out_dir, records)
+    if fmt == "pdf":
+        merge_month_pdfs(out_dir, records)
+
+    ext = "pdf" if fmt == "pdf" else "xml"
+    total_on_disk = sum(1 for p in out_dir.rglob(f"*.{ext}")
+                        if "_do_druku" not in p.parts) if out_dir.exists() else 0
+    log(f"Podsumowanie ({company['nazwa']}):")
+    log_summary(records)
+    log(f"Pobrano {total_found} faktur, nowych: {total_new} szt. | na dysku: {total_on_disk}")
+    log(f"Folder: {out_dir}")
+    return total_found, total_new
+
+
 def main() -> None:
     here = Path(__file__).resolve().parent
     load_dotenv(here / ".env")
@@ -979,42 +1172,20 @@ def main() -> None:
     if fmt not in FORMATS:
         sys.exit(f"[BŁĄD] Nieznany KSEF_FORMAT={fmt!r}. Dozwolone: xml | pdf.")
 
-    # 1. Wybór firmy
     companies = load_companies(here)
-    company = choose_company(companies)
-    env = company["env"]
-    if env not in BASE_URLS:
-        sys.exit(f"[BŁĄD] Nieznane środowisko '{env}' dla firmy {company['nazwa']}. "
-                 f"Dozwolone: {list(BASE_URLS)}")
-    base_url = BASE_URLS[env]
-
-    # 2. Zakres dat
+    selected = choose_companies(companies)
     date_from, date_to = choose_dates()
 
-    # 3. Katalog wyjściowy per firma
-    out_dir = FAKTURY_DIR / company_slug(company["nazwa"])
-    renderer = PdfRenderer(env) if fmt == "pdf" else None
+    grand_found = grand_new = 0
+    for company in selected:
+        found, new = process_company(company, date_from, date_to, date_type, mode, fmt)
+        grand_found += found
+        grand_new += new
 
-    log(f"Firma: {company['nazwa']} (NIP {company['nip']})")
-    log(f"Środowisko: {env} ({base_url})")
-    log(f"Zakres dat: {date_from} .. {date_to} | dateType: {date_type} "
-        f"| tryb: {mode} | format: {fmt}")
-
-    client = KsefClient(base_url, company["nip"], company["token"])
-    retry(client.authenticate)
-
-    if mode in MODES_EXPORT:
-        total_found, total_new = run_export(client, out_dir, date_from, date_to, date_type, fmt, renderer)
-    else:
-        total_found, total_new = run_single(client, out_dir, date_from, date_to, date_type, fmt, renderer)
-
-    # Łączna liczba faktur firmy trzymanych na dysku.
-    ext = "pdf" if fmt == "pdf" else "xml"
-    total_on_disk = sum(1 for _ in out_dir.rglob(f"*.{ext}")) if out_dir.exists() else 0
-    log("=" * 60)
-    log(f"Pobrano {total_found} faktur, nowych: {total_new} szt.")
-    log(f"Wszystkie faktury firmy {company['nazwa']} ({total_on_disk} szt.) "
-        f"w folderze: {out_dir}")
+    if len(selected) > 1:
+        log("=" * 60)
+        log(f"RAZEM ({len(selected)} firm): pobrano {grand_found} faktur, "
+            f"nowych: {grand_new} szt.")
 
 
 if __name__ == "__main__":

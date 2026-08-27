@@ -104,13 +104,33 @@ faktury/
     ├── sprzedaz/               # faktury wystawione przez tę firmę (subject1)
     │   ├── 2026-07/            # faktury z lipca 2026
     │   └── 2026-08/
-    └── zakup/                  # faktury wystawione na tę firmę (subject2)
-        └── 2026-08/
+    ├── zakup/                  # faktury wystawione na tę firmę (subject2)
+    │   └── 2026-08/
+    ├── rejestr_2026-08.csv     # zestawienie faktur miesiąca (dla księgowości)
+    └── _do_druku/              # scalone PDF-y miesiąca (tylko KSEF_FORMAT=pdf)
+        ├── sprzedaz_2026-08.pdf
+        └── zakup_2026-08.pdf
 ```
 
 Miesiąc ustalany jest według wybranego `KSEF_DATE_TYPE` (domyślnie data
 wystawienia). Skrypt pomija faktury już zapisane na dysku (po numerze KSeF),
 więc można go uruchamiać wielokrotnie – działa przyrostowo.
+
+## Zestawienia i wygoda
+
+Po pobraniu skrypt dodatkowo:
+
+- **Rejestr CSV** (`rejestr_RRRR-MM.csv` per firma/miesiąc) — numer KSeF, numer
+  faktury, kontrahent, daty, netto/VAT/brutto, waluta. Format PL (średnik,
+  przecinek dziesiętny, `utf-8-sig`) — otwiera się wprost w Excelu. Kolejne
+  uruchomienia **dokładają** wpisy (scalanie po numerze KSeF).
+- **Scalony PDF miesiąca** (`_do_druku/<typ>_RRRR-MM.pdf`) — wszystkie faktury
+  danego miesiąca w jednym pliku, wygodne do druku jednym zleceniem
+  (tylko przy `KSEF_FORMAT=pdf`; wymaga `pypdf`).
+- **Podsumowanie kwot** na koniec — sumy netto/VAT/brutto osobno dla sprzedaży
+  i zakupu.
+- **Wszystkie firmy naraz** — w menu wyboru firmy opcja `0) Wszystkie firmy`
+  (lub `KSEF_FIRMA=all` w cronie) przetwarza po kolei każdą firmę z `firmy.json`.
 
 ## Format zapisu (`KSEF_FORMAT`)
 
@@ -150,8 +170,9 @@ katalogu przy pierwszym uruchomieniu w trybie `pdf`.
 
 **macOS:** zainstaluj Node przez Homebrew (`brew install node`) — skrypt sam go
 znajdzie (Apple Silicon `/opt/homebrew`, Intel `/usr/local`). Zależności Pythona:
-`pip3 install requests cryptography`. Uruchomienie: `python3 ksef_pobierz.py`.
+`pip3 install -r requirements.txt`. Uruchomienie: `python3 ksef_pobierz.py`.
 Jeśli `node` nie jest w `PATH`, wskaż go zmienną `KSEF_NODE=/ścieżka/do/node`.
+Najprościej: `bash setup.sh` zrobi to wszystko.
 
 ## Tryby pobierania (`KSEF_MODE`)
 
@@ -164,7 +185,8 @@ Jeśli `node` nie jest w `PATH`, wskaż go zmienną `KSEF_NODE=/ścieżka/do/nod
      (RSA-OAEP SHA-256, certyfikat `SymmetricKeyEncryption`),
   2. zleca eksport i odpytuje status aż do zakończenia (`200`),
   3. pobiera części paczki (bez tokenu – osobny storage), weryfikuje ich skróty
-     SHA-256, odszyfrowuje (AES-256-CBC) i rozpakowuje pliki XML do `faktury/`.
+     SHA-256, odszyfrowuje (AES-256-CBC) i zapisuje faktury (XML lub PDF)
+     do folderu firmy, tak samo jak tryb `single`.
 
   Uwaga: jedna paczka mieści do **10 000 faktur**; przy przekroczeniu limitu
   (`isTruncated`) skrypt to zgłasza – zawęź wtedy zakres dat.

@@ -1,5 +1,8 @@
 requests>=2.31
 cryptography>=42.0
 
-# Tryb KSEF_FORMAT=pdf NIE wymaga dodatkowych pakietów Pythona — korzysta
-# z oficjalnego generatora MF (Node.js). Instalacja: patrz README, sekcja PDF.
+# Scalanie PDF-ów miesiąca (folder _do_druku); używane tylko przy KSEF_FORMAT=pdf.
+pypdf>=4.0
+
+# Sama wizualizacja PDF (KSEF_FORMAT=pdf) korzysta z oficjalnego generatora MF
+# (Node.js) — patrz README, sekcja „Format zapisu".

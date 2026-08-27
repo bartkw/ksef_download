@@ -26,8 +26,8 @@ fi
 PYV=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 ok "python3 = $PYV"
 
-step "Zależności Pythona (requests, cryptography)"
-if python3 -c 'import requests, cryptography' >/dev/null 2>&1; then
+step "Zależności Pythona (requests, cryptography, pypdf)"
+if python3 -c 'import requests, cryptography, pypdf' >/dev/null 2>&1; then
   ok "już zainstalowane"
 else
   warn "instaluję z requirements.txt..."
