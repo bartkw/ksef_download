@@ -1,12 +1,29 @@
 # Pobieranie faktur z KSeF 2.0
 
 Skrypt w Pythonie pobierający faktury (sprzedażowe i zakupowe) z Krajowego
-Systemu e-Faktur (KSeF 2.0) przy użyciu **tokena KSeF**.
+Systemu e-Faktur (KSeF 2.0) przy użyciu **tokena KSeF**. Obsługuje wiele firm,
+zapis XML lub PDF (oficjalna wizualizacja MF), podział na miesiące, rejestr CSV
+i pracę przyrostową.
+
+## Spis treści
+
+- [Wymagania](#wymagania)
+- [Instalacja](#instalacja)
+- [Konfiguracja](#konfiguracja)
+- [Uruchomienie](#uruchomienie)
+- [Format zapisu (XML / PDF)](#format-zapisu-xml--pdf)
+- [Tryby pobierania (single / export)](#tryby-pobierania-single--export)
+- [Zestawienia i wygoda](#zestawienia-i-wygoda)
+- [Automatyzacja (cron)](#automatyzacja-cron)
+- [Log i weryfikacja integralności](#log-i-weryfikacja-integralności)
+- [Jak to działa (KSeF 2.0)](#jak-to-działa-ksef-20)
+- [Uwagi](#uwagi)
 
 ## Wymagania
 
 - Python 3.10+
 - Token KSeF wygenerowany w Aplikacji Podatnika KSeF (w kontekście Twojej firmy)
+- Dla `KSEF_FORMAT=pdf`: Node.js ≥ 20 + generator MF (patrz „Format zapisu")
 
 ## Instalacja
 
@@ -19,9 +36,9 @@ bash setup.sh
 `setup.sh` wykonuje kolejno:
 
 1. sprawdza `python3` (3.10+),
-2. instaluje zależności Pythona (`requests`, `cryptography`) — z fallbackami
-   dla środowisk „externally-managed" (`--user` / `--break-system-packages`,
-   a w ostateczności podpowiada `venv`),
+2. instaluje zależności Pythona (`requests`, `cryptography`, `pypdf`) — z
+   fallbackami dla środowisk „externally-managed" (`--user` /
+   `--break-system-packages`, a w ostateczności podpowiada `venv`),
 3. wykrywa Node.js (Homebrew Apple Silicon `/opt/homebrew`, Intel `/usr/local`,
    `PATH`, nvm) — wymagany tylko dla `KSEF_FORMAT=pdf`,
 4. klonuje generator PDF `CIRFMF/ksef-pdf-generator` (jeśli go brak)
@@ -29,14 +46,14 @@ bash setup.sh
 5. tworzy `.env` z `env.example.txt` (istniejącego nie nadpisuje),
 6. robi self-check (moduł się ładuje, Node wykryty, generator gotowy).
 
-Po zakończeniu uzupełnij `.env` (`KSEF_TOKEN`, `KSEF_NIP`) i uruchom skrypt.
+Po zakończeniu uzupełnij `.env` (i/lub `firmy.json`) i uruchom skrypt.
 Bez Node.js tryb `pdf` nie zadziała, ale tryb `xml` owszem.
 
 **Ręcznie:**
 
 ```bash
 pip install -r requirements.txt
-# dla KSEF_FORMAT=pdf dodatkowo: Node.js + generator (patrz sekcja „Format zapisu")
+# dla KSEF_FORMAT=pdf dodatkowo: Node.js + generator (patrz „Format zapisu")
 ```
 
 ## Konfiguracja
@@ -69,23 +86,10 @@ Skopiuj `env.example.txt` do `.env` i ustaw:
 
 - `KSEF_DATE_TYPE` – typ daty filtrowania: `Issue` (wystawienia, domyślnie),
   `Invoicing` (przyjęcia w KSeF) lub `PermanentStorage` (trwałego zapisu),
-- `KSEF_MODE` – tryb pobierania: `single` (domyślnie) lub `export` (patrz niżej),
-- `KSEF_FORMAT` – format zapisu: `xml` (oryginał, domyślnie) lub `pdf`
-  (wizualizacja do druku oficjalnym generatorem MF; wymaga Node.js + generatora
-  — patrz sekcja „Format zapisu", instaluje `setup.sh`),
-- `KSEF_DATE_FROM`, `KSEF_DATE_TO` – używane tylko przy uruchomieniu
-  **nieinteraktywnym** (np. cron); interaktywnie skrypt pyta o daty.
-
-### Zakres dat
-
-Przy starcie skrypt pyta o zakres dat. Wciśnij **Enter**, aby pobrać
-**nowe faktury z bieżącego miesiąca** (istniejące są pomijane). Można też podać
-własny zakres `RRRR-MM-DD`.
-
-### Automatyzacja (cron, bez pytań)
-
-- `KSEF_FIRMA` – numer lub nazwa firmy z `firmy.json` (pomija menu),
-- `KSEF_DATE_FROM`/`KSEF_DATE_TO` – zakres dat (gdy brak → bieżący miesiąc).
+- `KSEF_MODE` – tryb pobierania: `single` (domyślnie) lub `export`,
+- `KSEF_FORMAT` – format zapisu: `xml` (domyślnie) lub `pdf`,
+- `KSEF_DATE_FROM`, `KSEF_DATE_TO` – zakres dat dla uruchomień
+  **nieinteraktywnych** (np. cron); interaktywnie skrypt pyta o daty.
 
 > ⚠️ Nie commituj `firmy.json` ani `.env` (zawierają tokeny). Oba są w `.gitignore`.
 
@@ -96,11 +100,23 @@ python ksef_pobierz.py
 ```
 
 Skrypt zapyta o **firmę** i **zakres dat**, po czym pobierze faktury do folderu
-danej firmy, w podziale na sprzedaż/zakup i podfoldery **rok-miesiąc** (`YYYY-MM`):
+danej firmy (w podziale na sprzedaż/zakup i podfoldery **rok-miesiąc**).
+
+### Wybór firmy i zakresu dat
+
+- **Firma** — menu z listą firm z `firmy.json`; opcja `0) Wszystkie firmy`
+  przetwarza po kolei każdą firmę.
+- **Zakres dat**:
+  1. **Nowe z bieżącego miesiąca** (domyślne) — istniejące pomijane,
+  2. **Od ostatniego pobrania** — od daty poprzedniego uruchomienia dla danej
+     firmy (zapamiętanej w `.stan.json`), do dziś,
+  3. **Ręcznie** — własny zakres `RRRR-MM-DD`.
+
+Struktura wyników:
 
 ```
 faktury/
-└── Moja_Firma/                 # osobny folder na każdą firmę z firmy.json
+└── Moja_Firma/                 # osobny folder na każdą firmę
     ├── sprzedaz/               # faktury wystawione przez tę firmę (subject1)
     │   ├── 2026-07/            # faktury z lipca 2026
     │   └── 2026-08/
@@ -116,23 +132,20 @@ Miesiąc ustalany jest według wybranego `KSEF_DATE_TYPE` (domyślnie data
 wystawienia). Skrypt pomija faktury już zapisane na dysku (po numerze KSeF),
 więc można go uruchamiać wielokrotnie – działa przyrostowo.
 
-## Zestawienia i wygoda
+### Argumenty wiersza poleceń (opcjonalne)
 
-Po pobraniu skrypt dodatkowo:
+```
+python ksef_pobierz.py [-q|--quiet] [--firma X] [--od RRRR-MM-DD] [--do RRRR-MM-DD] [--od-ostatniego]
+```
 
-- **Rejestr CSV** (`rejestr_RRRR-MM.csv` per firma/miesiąc) — numer KSeF, numer
-  faktury, kontrahent, daty, netto/VAT/brutto, waluta. Format PL (średnik,
-  przecinek dziesiętny, `utf-8-sig`) — otwiera się wprost w Excelu. Kolejne
-  uruchomienia **dokładają** wpisy (scalanie po numerze KSeF).
-- **Scalony PDF miesiąca** (`_do_druku/<typ>_RRRR-MM.pdf`) — wszystkie faktury
-  danego miesiąca w jednym pliku, wygodne do druku jednym zleceniem
-  (tylko przy `KSEF_FORMAT=pdf`; wymaga `pypdf`).
-- **Podsumowanie kwot** na koniec — sumy netto/VAT/brutto osobno dla sprzedaży
-  i zakupu.
-- **Wszystkie firmy naraz** — w menu wyboru firmy opcja `0) Wszystkie firmy`
-  (lub `KSEF_FIRMA=all` w cronie) przetwarza po kolei każdą firmę z `firmy.json`.
+- `--quiet` — bez wypisywania na konsolę (nadal loguje do pliku); tryb nieinteraktywny,
+- `--firma` — numer, nazwa lub `all` (pomija menu),
+- `--od` / `--do` — zakres dat bez pytania,
+- `--od-ostatniego` — pobierz od ostatniego pobrania.
 
-## Format zapisu (`KSEF_FORMAT`)
+## Format zapisu (XML / PDF)
+
+Ustawiany przez `KSEF_FORMAT`:
 
 - **`xml`** (domyślny) – zapisuje oryginalny plik XML faktury.
 - **`pdf`** – generuje **PDF do druku identyczny z tym z Aplikacji Podatnika
@@ -165,16 +178,16 @@ katalogu przy pierwszym uruchomieniu w trybie `pdf`.
 > **Ważne przy przenoszeniu między systemami (np. Windows ↔ macOS):**
 > katalog `node_modules` jest zależny od systemu. Nie kopiuj go między
 > maszynami — na nowym komputerze wejdź do `vendor/ksef-pdf-generator/`
-> i uruchom `npm install` jeszcze raz (jest w `.gitignore`, więc i tak nie
-> trafi do repo).
+> i uruchom `npm install` jeszcze raz (jest w `.gitignore`).
 
 **macOS:** zainstaluj Node przez Homebrew (`brew install node`) — skrypt sam go
-znajdzie (Apple Silicon `/opt/homebrew`, Intel `/usr/local`). Zależności Pythona:
-`pip3 install -r requirements.txt`. Uruchomienie: `python3 ksef_pobierz.py`.
-Jeśli `node` nie jest w `PATH`, wskaż go zmienną `KSEF_NODE=/ścieżka/do/node`.
-Najprościej: `bash setup.sh` zrobi to wszystko.
+znajdzie (Apple Silicon `/opt/homebrew`, Intel `/usr/local`). Jeśli `node` nie
+jest w `PATH`, wskaż go zmienną `KSEF_NODE=/ścieżka/do/node`. Najprościej:
+`bash setup.sh` zrobi to wszystko.
 
-## Tryby pobierania (`KSEF_MODE`)
+## Tryby pobierania (single / export)
+
+Ustawiane przez `KSEF_MODE`:
 
 - **`single`** (domyślny) – dla każdej faktury osobne `GET /invoices/ksef/{num}`.
   Prosty i wystarczający dla typowej firmy.
@@ -190,6 +203,43 @@ Najprościej: `bash setup.sh` zrobi to wszystko.
 
   Uwaga: jedna paczka mieści do **10 000 faktur**; przy przekroczeniu limitu
   (`isTruncated`) skrypt to zgłasza – zawęź wtedy zakres dat.
+
+## Zestawienia i wygoda
+
+Po pobraniu skrypt dodatkowo:
+
+- **Rejestr CSV** (`rejestr_RRRR-MM.csv` per firma/miesiąc) — numer KSeF, numer
+  faktury, kontrahent, daty, netto/VAT/brutto, waluta. Format PL (średnik,
+  przecinek dziesiętny, `utf-8-sig`) — otwiera się wprost w Excelu. Kolejne
+  uruchomienia **dokładają** wpisy (scalanie po numerze KSeF).
+- **Scalony PDF miesiąca** (`_do_druku/<typ>_RRRR-MM.pdf`) — wszystkie faktury
+  danego miesiąca w jednym pliku, wygodne do druku jednym zleceniem
+  (tylko przy `KSEF_FORMAT=pdf`; wymaga `pypdf`).
+- **Podsumowanie kwot** na koniec — sumy netto/VAT/brutto osobno dla sprzedaży
+  i zakupu.
+
+## Automatyzacja (cron)
+
+Do uruchomień bez pytań (np. w cronie) użyj argumentów lub zmiennych:
+
+- `--firma` / `KSEF_FIRMA` – numer, nazwa firmy z `firmy.json` albo `all`,
+- `--od`/`--do` / `KSEF_DATE_FROM`/`KSEF_DATE_TO` – zakres dat,
+- `--od-ostatniego` / `KSEF_SINCE_LAST=1` – od ostatniego pobrania,
+- `--quiet` – cicho, tylko log do pliku.
+
+Przykład (wszystkie firmy, przyrostowo, cicho):
+
+```bash
+python3 ksef_pobierz.py --firma all --od-ostatniego --quiet
+```
+
+## Log i weryfikacja integralności
+
+- **Log** — każdy przebieg jest dopisywany do `logs/ksef.log` (z datą i godziną),
+  przydatne pod crona i do diagnostyki.
+- **Weryfikacja integralności** — po pobraniu skrypt porównuje `invoiceHash`
+  z metadanych z SHA-256 pobranego XML; przy niezgodności wypisuje ostrzeżenie
+  (nie przerywa pracy).
 
 ## Jak to działa (KSeF 2.0)
 
@@ -207,8 +257,7 @@ pobranie i odszyfrowanie części paczki ZIP.
 
 ## Uwagi
 
-Przepływ został przetestowany end-to-end na środowisku **demo**
-(2026-08-26) — potwierdzone:
+Przepływ został przetestowany end-to-end na środowisku **demo** — potwierdzone:
 
 - prefix ścieżki API: `/api/v2`,
 - pola JSON w `camelCase` (`subjectType`, `subject1`/`subject2`, `ksefNumber`),
@@ -218,21 +267,21 @@ Przepływ został przetestowany end-to-end na środowisku **demo**
 - `token` do zaszyfrowania = **pełny** string wygenerowany w Aplikacji
   Podatnika (format `numer|nip-XXX|sekret`), a nie sama jego część,
 - eksport paczki: klucz AES-256 szyfrowany certyfikatem `SymmetricKeyEncryption`,
-  paczka to ZIP zaszyfrowany **AES-256-CBC** (pliki części `*.zip.aes`).
+  paczka to ZIP zaszyfrowany **AES-256-CBC** (pliki części `*.zip.aes`),
+- `invoiceHash` z metadanych = `base64(SHA-256(XML))` (podstawa weryfikacji).
 
 **Limit zakresu dat:** pojedyncze zapytanie o metadane nie może przekraczać
 **3 miesięcy** (błąd `21405`). Skrypt automatycznie dzieli dowolny zakres na
-okna < 3 mies. (`date_windows`), więc `KSEF_DATE_FROM`/`KSEF_DATE_TO` mogą być
-dowolnie szerokie.
+okna < 3 mies. (`date_windows`), więc zakres dat może być dowolnie szeroki.
+
+**Przyrostowe pobieranie spójnych danych:** warto filtrować po
+`KSEF_DATE_TYPE=PermanentStorage` (dane poniżej tego znacznika już się nie
+zmieniają).
 
 Swagger poszczególnych środowisk:
 
 - prod: <https://api.ksef.mf.gov.pl/docs/v2>
 - demo: <https://api-demo.ksef.mf.gov.pl/docs/v2>
 - test: <https://api-test.ksef.mf.gov.pl/docs/v2>
-
-Do **masowego** pobierania dużych wolumenów użyj trybu `KSEF_MODE=export`
-(asynchroniczna, zaszyfrowana paczka). Dla przyrostowego pobierania spójnych
-danych warto filtrować po `KSEF_DATE_TYPE=PermanentStorage`.
 
 Źródło flow: oficjalna dokumentacja MF – <https://github.com/CIRFMF/ksef-docs>

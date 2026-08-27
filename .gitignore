@@ -1,6 +1,8 @@
 .env
 firmy.json
 faktury/
+logs/
+.stan.json
 __pycache__/
 *.pyc
 

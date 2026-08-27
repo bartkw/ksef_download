@@ -20,6 +20,7 @@ wielkość liter w polach JSON warto potwierdzić ze Swaggerem danego środowisk
 Wszystkie miejsca do ewentualnej korekty są zebrane w sekcji KONFIGURACJA.
 """
 
+import argparse
 import base64
 import csv
 import hashlib
@@ -186,8 +187,32 @@ def require_env(name: str) -> str:
     return val
 
 
+_QUIET = False          # --quiet: bez wypisywania na konsolę
+_LOG_FH = None          # uchwyt pliku logu (logs/ksef.log)
+
+
+def setup_logging(here: Path, quiet: bool) -> None:
+    """Włącza log do pliku (logs/ksef.log) i ewentualny tryb cichy."""
+    global _QUIET, _LOG_FH
+    _QUIET = quiet
+    log_dir = here / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    _LOG_FH = open(log_dir / "ksef.log", "a", encoding="utf-8")
+
+
+def _interactive() -> bool:
+    """Czy pytać użytkownika (jest terminal i nie tryb cichy)."""
+    return sys.stdin.isatty() and not _QUIET
+
+
 def log(msg: str) -> None:
-    print(f"[KSeF] {msg}", flush=True)
+    line = f"[KSeF] {msg}"
+    if not _QUIET:
+        print(line, flush=True)
+    if _LOG_FH:
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _LOG_FH.write(f"{stamp} {line}\n")
+        _LOG_FH.flush()
 
 
 def _add_months(d: date, n: int) -> date:
@@ -294,7 +319,19 @@ def invoice_record(item: dict, typ: str, date_type: str) -> dict:
         "vat": item.get("vatAmount"),
         "brutto": item.get("grossAmount"),
         "waluta": item.get("currency") or "",
+        "hash": item.get("invoiceHash") or "",
     }
+
+
+def verify_hash(xml_bytes: bytes, expected: str) -> bool:
+    """Sprawdza spójność XML z metadanymi: base64(SHA-256(xml)) == invoiceHash.
+
+    Zwraca True gdy zgodne lub gdy brak wartości oczekiwanej (nie ma czego porównać).
+    """
+    if not expected:
+        return True
+    calc = base64.b64encode(hashlib.sha256(xml_bytes).digest()).decode("ascii")
+    return calc == expected
 
 
 def _fmt_amount(v) -> str:
@@ -440,6 +477,7 @@ def extract_invoices(data: bytes, out_dir: Path, date_type: str = DEFAULT_DATE_T
 
     records = []
     month_map = {}
+    hash_map = {}
     for name, raw in entries.items():
         if os.path.basename(name).lower() == "_metadata.json":
             try:
@@ -451,6 +489,7 @@ def extract_invoices(data: bytes, out_dir: Path, date_type: str = DEFAULT_DATE_T
                 if rec["ksef"]:
                     records.append(rec)
                     month_map[rec["ksef"]] = rec["miesiac"]
+                    hash_map[rec["ksef"]] = rec.get("hash", "")
             break
 
     ext = "pdf" if fmt == "pdf" else "xml"
@@ -461,6 +500,8 @@ def extract_invoices(data: bytes, out_dir: Path, date_type: str = DEFAULT_DATE_T
         if not base or not base.lower().endswith(".xml"):
             continue
         ksef = base[:-4]  # nazwa pliku = "{ksefNumber}.xml"
+        if not verify_hash(content, hash_map.get(ksef, "")):
+            log(f"    UWAGA: niezgodny hash faktury {ksef} (plik może być uszkodzony)")
         month = month_map.get(ksef) or month_from_ksef(ksef)
         target_dir = out_dir / month
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -958,6 +999,9 @@ def run_single(client: "KsefClient", out_dir: Path, date_from: str, date_to: str
                     remove_sibling_xml(dest)
                 continue
             xml_bytes = retry(lambda n=num: client.fetch_invoice_xml(n))
+            if not verify_hash(xml_bytes, rec.get("hash", "")):
+                log(f"  [{i}/{len(invoices)}] UWAGA: niezgodny hash faktury {num} "
+                    f"(plik może być uszkodzony)")
             if fmt == "pdf":
                 pdf_jobs.append((num, dest, rel, xml_bytes))
             else:
@@ -1070,8 +1114,8 @@ def choose_companies(companies: list) -> list:
         sys.exit(f"[BŁĄD] Nie znaleziono firmy pasującej do KSEF_FIRMA={pre!r}.")
     if len(companies) == 1:
         return [companies[0]]
-    if not sys.stdin.isatty():
-        sys.exit("[BŁĄD] Wiele firm w konfiguracji — wskaż firmę zmienną KSEF_FIRMA "
+    if not _interactive():
+        sys.exit("[BŁĄD] Wiele firm w konfiguracji — wskaż firmę zmienną KSEF_FIRMA / --firma "
                  "(numer, nazwa lub 'all').")
     print("Wybierz firmę:")
     for i, c in enumerate(companies, 1):
@@ -1086,16 +1130,46 @@ def choose_companies(companies: list) -> list:
         print("Niepoprawny numer — spróbuj ponownie.")
 
 
-def choose_dates() -> tuple:
-    """Zakres dat. Interaktywnie pyta (domyślnie: bieżący miesiąc = 'nowe z tego
-    miesiąca'). Nieinteraktywnie: bierze z env lub bieżący miesiąc."""
+STATE_FILE = Path(__file__).resolve().parent / ".stan.json"
+
+
+def load_state() -> dict:
+    """Wczytuje stan (data ostatniego pobrania per firma) z .stan.json."""
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        except ValueError:
+            return {}
+    return {}
+
+
+def save_state(state: dict) -> None:
+    try:
+        STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as e:
+        log(f"  (nie udało się zapisać stanu: {e})")
+
+
+def choose_date_spec(args) -> dict:
+    """Ustala sposób wyznaczania zakresu dat.
+
+    Zwraca {'mode':'range','from','to'} albo {'mode':'since_last'} (per firma).
+    """
     today = datetime.now(timezone.utc).date()
     first = today.replace(day=1)
-    def_from, def_to = first.isoformat(), today.isoformat()
 
-    if not sys.stdin.isatty():
-        return (os.environ.get("KSEF_DATE_FROM") or def_from,
-                os.environ.get("KSEF_DATE_TO") or def_to)
+    # Wymuszenia z CLI / env (dla trybu nieinteraktywnego i wygody).
+    if args.od_ostatniego or os.environ.get("KSEF_SINCE_LAST", "").strip().lower() in ("1", "true", "tak", "yes"):
+        return {"mode": "since_last"}
+    if args.od or args.do:
+        return {"mode": "range",
+                "from": args.od or first.isoformat(),
+                "to": args.do or today.isoformat()}
+
+    if not _interactive():
+        return {"mode": "range",
+                "from": os.environ.get("KSEF_DATE_FROM") or first.isoformat(),
+                "to": os.environ.get("KSEF_DATE_TO") or today.isoformat()}
 
     def ask(label: str, default: str) -> str:
         while True:
@@ -1108,8 +1182,28 @@ def choose_dates() -> tuple:
             except ValueError:
                 print("    Zły format — użyj RRRR-MM-DD (albo Enter dla domyślnej).")
 
-    print("Zakres dat (Enter = nowe z bieżącego miesiąca):")
-    return ask("Data od", def_from), ask("Data do", def_to)
+    print("Zakres dat:")
+    print("  1) Nowe z bieżącego miesiąca [domyślne]")
+    print("  2) Od ostatniego pobrania (per firma)")
+    print("  3) Podaj zakres ręcznie")
+    choice = input("Wybór [1]: ").strip() or "1"
+    if choice == "2":
+        return {"mode": "since_last"}
+    if choice == "3":
+        return {"mode": "range",
+                "from": ask("Data od", first.isoformat()),
+                "to": ask("Data do", today.isoformat())}
+    return {"mode": "range", "from": first.isoformat(), "to": today.isoformat()}
+
+
+def resolve_dates(spec: dict, slug: str, state: dict) -> tuple:
+    """Zamienia spec na konkretny (date_from, date_to) dla danej firmy."""
+    today = datetime.now(timezone.utc).date()
+    if spec["mode"] == "since_last":
+        first = today.replace(day=1)
+        d_from = state.get(slug) or first.isoformat()
+        return d_from, today.isoformat()
+    return spec["from"], spec["to"]
 
 
 def company_slug(name: str) -> str:
@@ -1119,20 +1213,24 @@ def company_slug(name: str) -> str:
     return s or "firma"
 
 
-def process_company(company: dict, date_from: str, date_to: str, date_type: str,
+def process_company(company: dict, spec: dict, state: dict, date_type: str,
                     mode: str, fmt: str) -> tuple:
-    """Przetwarza jedną firmę: pobiera faktury, zapisuje rejestr CSV, scala PDF-y,
-    wypisuje podsumowanie. Zwraca (znalezione, nowe)."""
+    """Przetwarza jedną firmę: ustala zakres dat (per firma), pobiera faktury,
+    zapisuje rejestr CSV, scala PDF-y, aktualizuje stan. Zwraca (znalezione, nowe)."""
     env = company["env"]
     if env not in BASE_URLS:
         sys.exit(f"[BŁĄD] Nieznane środowisko '{env}' dla firmy {company['nazwa']}. "
                  f"Dozwolone: {list(BASE_URLS)}")
     base_url = BASE_URLS[env]
-    out_dir = FAKTURY_DIR / company_slug(company["nazwa"])
+    slug = company_slug(company["nazwa"])
+    out_dir = FAKTURY_DIR / slug
     renderer = PdfRenderer(env) if fmt == "pdf" else None
+    date_from, date_to = resolve_dates(spec, slug, state)
 
     log("=" * 60)
     log(f"Firma: {company['nazwa']} (NIP {company['nip']}) | środowisko: {env}")
+    if spec["mode"] == "since_last":
+        log(f"Zakres dat: od ostatniego pobrania → {date_from} .. {date_to}")
     log(f"Zakres dat: {date_from} .. {date_to} | dateType: {date_type} "
         f"| tryb: {mode} | format: {fmt}")
 
@@ -1150,6 +1248,10 @@ def process_company(company: dict, date_from: str, date_to: str, date_type: str,
     if fmt == "pdf":
         merge_month_pdfs(out_dir, records)
 
+    # Zapisz datę tego pobrania jako punkt odniesienia dla trybu 'od ostatniego'.
+    state[slug] = datetime.now(timezone.utc).date().isoformat()
+    save_state(state)
+
     ext = "pdf" if fmt == "pdf" else "xml"
     total_on_disk = sum(1 for p in out_dir.rglob(f"*.{ext}")
                         if "_do_druku" not in p.parts) if out_dir.exists() else 0
@@ -1160,9 +1262,25 @@ def process_company(company: dict, date_from: str, date_to: str, date_type: str,
     return total_found, total_new
 
 
+def parse_args():
+    p = argparse.ArgumentParser(description="Pobieranie faktur z KSeF 2.0.")
+    p.add_argument("-q", "--quiet", action="store_true",
+                   help="bez wypisywania na konsolę (nadal loguje do pliku); tryb nieinteraktywny")
+    p.add_argument("--firma", help="numer, nazwa lub 'all' — pomija menu wyboru firmy")
+    p.add_argument("--od", help="data od (RRRR-MM-DD)")
+    p.add_argument("--do", help="data do (RRRR-MM-DD)")
+    p.add_argument("--od-ostatniego", dest="od_ostatniego", action="store_true",
+                   help="pobierz od ostatniego pobrania (per firma)")
+    return p.parse_args()
+
+
 def main() -> None:
     here = Path(__file__).resolve().parent
     load_dotenv(here / ".env")
+    args = parse_args()
+    setup_logging(here, args.quiet)
+    if args.firma:
+        os.environ["KSEF_FIRMA"] = args.firma
 
     date_type = normalize_date_type(os.environ.get("KSEF_DATE_TYPE", DEFAULT_DATE_TYPE))
     mode = os.environ.get("KSEF_MODE", "single").strip().lower()
@@ -1174,11 +1292,12 @@ def main() -> None:
 
     companies = load_companies(here)
     selected = choose_companies(companies)
-    date_from, date_to = choose_dates()
+    spec = choose_date_spec(args)
+    state = load_state()
 
     grand_found = grand_new = 0
     for company in selected:
-        found, new = process_company(company, date_from, date_to, date_type, mode, fmt)
+        found, new = process_company(company, spec, state, date_type, mode, fmt)
         grand_found += found
         grand_new += new
 
