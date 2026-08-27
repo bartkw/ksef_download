@@ -3,10 +3,10 @@ firmy.json
 faktury/
 logs/
 .stan.json
+wzor.pdf
 __pycache__/
 *.pyc
 
-# Oficjalny generator PDF (Node) — zależności i pliki robocze
-vendor/ksef-pdf-generator/node_modules/
-vendor/ksef-pdf-generator/job.json
-vendor/ksef-pdf-generator/job.json.result
+# Generator PDF (Node) — instalowany per maszyna przez setup.sh/setup.ps1
+# (git clone + npm install), więc NIE trzymamy go w repo.
+vendor/
