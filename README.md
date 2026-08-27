@@ -41,20 +41,53 @@ pip install -r requirements.txt
 
 ## Konfiguracja
 
-1. Skopiuj `env.example.txt` do pliku `.env`.
-2. Uzupełnij:
-   - `KSEF_TOKEN` – Twój token KSeF (traktuj jak hasło!),
-   - `KSEF_NIP` – NIP firmy,
-   - `KSEF_ENV` – `prod` / `demo` / `test`,
-   - `KSEF_DATE_FROM`, `KSEF_DATE_TO` – zakres dat (opcjonalnie; domyślnie ostatnie 30 dni),
-   - `KSEF_DATE_TYPE` – typ daty filtrowania: `Issue` (wystawienia, domyślnie),
-     `Invoicing` (przyjęcia w KSeF) lub `PermanentStorage` (trwałego zapisu),
-   - `KSEF_MODE` – tryb pobierania: `single` (domyślnie) lub `export` (patrz niżej),
-   - `KSEF_FORMAT` – format zapisu: `xml` (oryginał, domyślnie) lub `pdf`
-     (wizualizacja do druku oficjalnym generatorem MF; wymaga Node.js + generatora
-     — patrz sekcja „Format zapisu", instaluje `setup.sh`).
+Ustawienia dzielą się na **firmy** (tokeny + NIP-y) i **opcje wspólne** (`.env`).
 
-> ⚠️ Nie commituj pliku `.env` ani tokena do repozytorium.
+### Firmy (`firmy.json`) — obsługa wielu firm
+
+Skopiuj `firmy.example.json` do `firmy.json` i wpisz swoje firmy:
+
+```json
+{
+  "firmy": [
+    { "nazwa": "Moja Firma",       "nip": "8792408754", "token": "…", "env": "prod" },
+    { "nazwa": "Druga Sp. z o.o.", "nip": "5260250995", "token": "…", "env": "prod" },
+    { "nazwa": "Testowa (demo)",   "nip": "1111111111", "token": "…", "env": "demo" }
+  ]
+}
+```
+
+Przy uruchomieniu skrypt **zapyta, dla której firmy** pobrać faktury. Każda firma
+ma własny folder wyników: `faktury/<nazwa firmy>/…`.
+
+> Jeśli nie utworzysz `firmy.json`, skrypt użyje pojedynczej firmy z `.env`
+> (`KSEF_TOKEN` + `KSEF_NIP`) — działa jak wcześniej.
+
+### Opcje wspólne (`.env`)
+
+Skopiuj `env.example.txt` do `.env` i ustaw:
+
+- `KSEF_DATE_TYPE` – typ daty filtrowania: `Issue` (wystawienia, domyślnie),
+  `Invoicing` (przyjęcia w KSeF) lub `PermanentStorage` (trwałego zapisu),
+- `KSEF_MODE` – tryb pobierania: `single` (domyślnie) lub `export` (patrz niżej),
+- `KSEF_FORMAT` – format zapisu: `xml` (oryginał, domyślnie) lub `pdf`
+  (wizualizacja do druku oficjalnym generatorem MF; wymaga Node.js + generatora
+  — patrz sekcja „Format zapisu", instaluje `setup.sh`),
+- `KSEF_DATE_FROM`, `KSEF_DATE_TO` – używane tylko przy uruchomieniu
+  **nieinteraktywnym** (np. cron); interaktywnie skrypt pyta o daty.
+
+### Zakres dat
+
+Przy starcie skrypt pyta o zakres dat. Wciśnij **Enter**, aby pobrać
+**nowe faktury z bieżącego miesiąca** (istniejące są pomijane). Można też podać
+własny zakres `RRRR-MM-DD`.
+
+### Automatyzacja (cron, bez pytań)
+
+- `KSEF_FIRMA` – numer lub nazwa firmy z `firmy.json` (pomija menu),
+- `KSEF_DATE_FROM`/`KSEF_DATE_TO` – zakres dat (gdy brak → bieżący miesiąc).
+
+> ⚠️ Nie commituj `firmy.json` ani `.env` (zawierają tokeny). Oba są w `.gitignore`.
 
 ## Uruchomienie
 
@@ -62,16 +95,17 @@ pip install -r requirements.txt
 python ksef_pobierz.py
 ```
 
-Faktury (pliki XML) trafią do podfolderów **rok-miesiąc** (`YYYY-MM`),
-w podziale na sprzedaż i zakup:
+Skrypt zapyta o **firmę** i **zakres dat**, po czym pobierze faktury do folderu
+danej firmy, w podziale na sprzedaż/zakup i podfoldery **rok-miesiąc** (`YYYY-MM`):
 
 ```
 faktury/
-├── sprzedaz/            # faktury wystawione przez Twoją firmę (subject1)
-│   ├── 2026-07/         # faktury z lipca 2026
-│   └── 2026-08/
-└── zakup/               # faktury wystawione na Twoją firmę (subject2)
-    └── 2026-08/
+└── Moja_Firma/                 # osobny folder na każdą firmę z firmy.json
+    ├── sprzedaz/               # faktury wystawione przez tę firmę (subject1)
+    │   ├── 2026-07/            # faktury z lipca 2026
+    │   └── 2026-08/
+    └── zakup/                  # faktury wystawione na tę firmę (subject2)
+        └── 2026-08/
 ```
 
 Miesiąc ustalany jest według wybranego `KSEF_DATE_TYPE` (domyślnie data

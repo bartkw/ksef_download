@@ -85,7 +85,15 @@ if [ -f .env ]; then
 else
   cp env.example.txt .env
   ok "utworzono .env z env.example.txt"
-  warn "Uzupełnij w .env: KSEF_TOKEN oraz KSEF_NIP (i sprawdź KSEF_ENV/KSEF_FORMAT)."
+  warn "Uzupełnij w .env: KSEF_TOKEN oraz KSEF_NIP (i sprawdź KSEF_MODE/KSEF_FORMAT)."
+fi
+
+step "Firmy (opcjonalnie, wiele firm)"
+if [ -f firmy.json ]; then
+  ok "firmy.json już istnieje"
+else
+  warn "Aby wybierać spośród wielu firm: 'cp firmy.example.json firmy.json' i uzupełnij."
+  warn "Bez firmy.json skrypt użyje pojedynczej firmy z .env."
 fi
 
 # --------------------------------------------------------------------------- #

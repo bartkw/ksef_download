@@ -1,4 +1,5 @@
 .env
+firmy.json
 faktury/
 __pycache__/
 *.pyc

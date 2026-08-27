@@ -156,7 +156,8 @@ POLL_TIMEOUT_S = 120         # maks. czas oczekiwania na uwierzytelnienie
 EXPORT_POLL_TIMEOUT_S = 600  # eksport paczki bywa dłuższy niż uwierzytelnienie
 HTTP_TIMEOUT_S = 60
 
-OUT_DIR = Path(__file__).resolve().parent / "faktury"
+# Katalog bazowy na faktury; wewnątrz tworzone są podfoldery per firma.
+FAKTURY_DIR = Path(__file__).resolve().parent / "faktury"
 
 
 # --------------------------------------------------------------------------- #
@@ -785,7 +786,7 @@ ZADANIA = [
 ]
 
 
-def run_single(client: "KsefClient", date_from: str, date_to: str, date_type: str,
+def run_single(client: "KsefClient", out_dir: Path, date_from: str, date_to: str, date_type: str,
                fmt: str = DEFAULT_FORMAT, renderer: "PdfRenderer | None" = None):
     """Tryb pojedynczy: metadane -> pobieranie faktura po fakturze.
 
@@ -795,7 +796,7 @@ def run_single(client: "KsefClient", date_from: str, date_to: str, date_type: st
     total_found = 0
     total_new = 0
     for folder, subject in ZADANIA:
-        out = OUT_DIR / folder
+        out = out_dir / folder
         out.mkdir(parents=True, exist_ok=True)
         log(f"== Faktury: {folder} ==")
         invoices = retry(lambda s=subject: client.query_ksef_numbers(s, date_from, date_to, date_type))
@@ -835,7 +836,7 @@ def run_single(client: "KsefClient", date_from: str, date_to: str, date_type: st
     return total_found, total_new
 
 
-def run_export(client: "KsefClient", date_from: str, date_to: str, date_type: str,
+def run_export(client: "KsefClient", out_dir: Path, date_from: str, date_to: str, date_type: str,
                fmt: str = DEFAULT_FORMAT, renderer: "PdfRenderer | None" = None):
     """Tryb eksportu: asynchroniczna, zaszyfrowana paczka ZIP na okno dat.
 
@@ -844,7 +845,7 @@ def run_export(client: "KsefClient", date_from: str, date_to: str, date_type: st
     total_found = 0
     total_new = 0
     for folder, subject in ZADANIA:
-        out = OUT_DIR / folder
+        out = out_dir / folder
         out.mkdir(parents=True, exist_ok=True)
         log(f"== Eksport paczki: {folder} ==")
         for win_from, win_to in date_windows(date_from, date_to):
@@ -866,50 +867,154 @@ def run_export(client: "KsefClient", date_from: str, date_to: str, date_type: st
     return total_found, total_new
 
 
+def load_companies(here: Path) -> list:
+    """Wczytuje listę firm z firmy.json; awaryjnie pojedynczą firmę z .env.
+
+    Każda firma: {nazwa, nip, token, env}. env domyślnie z KSEF_ENV / 'prod'.
+    """
+    default_env = os.environ.get("KSEF_ENV", "prod").lower()
+    cfg = here / "firmy.json"
+    if cfg.exists():
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+        except ValueError as e:
+            sys.exit(f"[BŁĄD] Niepoprawny firmy.json: {e}")
+        firmy = data.get("firmy") if isinstance(data, dict) else data
+        out = []
+        for f in firmy or []:
+            token = f.get("token") or f.get("KSEF_TOKEN")
+            nip = str(f.get("nip") or f.get("KSEF_NIP") or "")
+            if not token or not nip:
+                continue
+            out.append({
+                "nazwa": f.get("nazwa") or f.get("name") or nip,
+                "nip": nip,
+                "token": token,
+                "env": (f.get("env") or default_env).lower(),
+            })
+        if not out:
+            sys.exit("[BŁĄD] firmy.json nie zawiera żadnej firmy z 'token' i 'nip'.")
+        return out
+    # Awaryjnie: pojedyncza firma z .env
+    token = os.environ.get("KSEF_TOKEN")
+    nip = os.environ.get("KSEF_NIP")
+    if token and nip:
+        return [{"nazwa": os.environ.get("KSEF_FIRMA_NAZWA") or nip,
+                 "nip": nip, "token": token, "env": default_env}]
+    sys.exit("[BŁĄD] Brak konfiguracji firm. Utwórz firmy.json (wzór: firmy.example.json) "
+             "albo uzupełnij KSEF_TOKEN i KSEF_NIP w .env.")
+
+
+def choose_company(companies: list) -> dict:
+    """Wybór firmy: przez KSEF_FIRMA (numer/nazwa), automatycznie gdy jedna,
+    inaczej interaktywne menu."""
+    pre = os.environ.get("KSEF_FIRMA", "").strip()
+    if pre:
+        if pre.isdigit() and 1 <= int(pre) <= len(companies):
+            return companies[int(pre) - 1]
+        for c in companies:
+            if c["nazwa"].lower() == pre.lower():
+                return c
+        for c in companies:
+            if pre.lower() in c["nazwa"].lower():
+                return c
+        sys.exit(f"[BŁĄD] Nie znaleziono firmy pasującej do KSEF_FIRMA={pre!r}.")
+    if len(companies) == 1:
+        return companies[0]
+    if not sys.stdin.isatty():
+        sys.exit("[BŁĄD] Wiele firm w konfiguracji — wskaż firmę zmienną KSEF_FIRMA "
+                 "(numer lub nazwa).")
+    print("Wybierz firmę:")
+    for i, c in enumerate(companies, 1):
+        print(f"  {i}) {c['nazwa']}  (NIP {c['nip']}, {c['env']})")
+    while True:
+        s = input("Numer firmy: ").strip()
+        if s.isdigit() and 1 <= int(s) <= len(companies):
+            return companies[int(s) - 1]
+        print("Niepoprawny numer — spróbuj ponownie.")
+
+
+def choose_dates() -> tuple:
+    """Zakres dat. Interaktywnie pyta (domyślnie: bieżący miesiąc = 'nowe z tego
+    miesiąca'). Nieinteraktywnie: bierze z env lub bieżący miesiąc."""
+    today = datetime.now(timezone.utc).date()
+    first = today.replace(day=1)
+    def_from, def_to = first.isoformat(), today.isoformat()
+
+    if not sys.stdin.isatty():
+        return (os.environ.get("KSEF_DATE_FROM") or def_from,
+                os.environ.get("KSEF_DATE_TO") or def_to)
+
+    def ask(label: str, default: str) -> str:
+        while True:
+            s = input(f"  {label} [{default}]: ").strip()
+            if not s:
+                return default
+            try:
+                date.fromisoformat(s)
+                return s
+            except ValueError:
+                print("    Zły format — użyj RRRR-MM-DD (albo Enter dla domyślnej).")
+
+    print("Zakres dat (Enter = nowe z bieżącego miesiąca):")
+    return ask("Data od", def_from), ask("Data do", def_to)
+
+
+def company_slug(name: str) -> str:
+    """Bezpieczna nazwa folderu dla firmy."""
+    s = re.sub(r'[\\/:*?"<>|]+', "", name).strip()
+    s = re.sub(r"\s+", "_", s)
+    return s or "firma"
+
+
 def main() -> None:
     here = Path(__file__).resolve().parent
     load_dotenv(here / ".env")
 
-    env = os.environ.get("KSEF_ENV", "prod").lower()
-    if env not in BASE_URLS:
-        sys.exit(f"[BŁĄD] Nieznane środowisko KSEF_ENV={env}. Dozwolone: {list(BASE_URLS)}")
-    base_url = BASE_URLS[env]
-
-    token = require_env("KSEF_TOKEN")
-    nip = require_env("KSEF_NIP")
-
-    today = datetime.now(timezone.utc).date()
-    date_from = os.environ.get("KSEF_DATE_FROM") or (today - timedelta(days=30)).isoformat()
-    date_to = os.environ.get("KSEF_DATE_TO") or today.isoformat()
     date_type = normalize_date_type(os.environ.get("KSEF_DATE_TYPE", DEFAULT_DATE_TYPE))
-
     mode = os.environ.get("KSEF_MODE", "single").strip().lower()
     if mode not in MODES_SINGLE | MODES_EXPORT:
         sys.exit(f"[BŁĄD] Nieznany KSEF_MODE={mode!r}. Dozwolone: single | export.")
-
     fmt = os.environ.get("KSEF_FORMAT", DEFAULT_FORMAT).strip().lower()
     if fmt not in FORMATS:
         sys.exit(f"[BŁĄD] Nieznany KSEF_FORMAT={fmt!r}. Dozwolone: xml | pdf.")
+
+    # 1. Wybór firmy
+    companies = load_companies(here)
+    company = choose_company(companies)
+    env = company["env"]
+    if env not in BASE_URLS:
+        sys.exit(f"[BŁĄD] Nieznane środowisko '{env}' dla firmy {company['nazwa']}. "
+                 f"Dozwolone: {list(BASE_URLS)}")
+    base_url = BASE_URLS[env]
+
+    # 2. Zakres dat
+    date_from, date_to = choose_dates()
+
+    # 3. Katalog wyjściowy per firma
+    out_dir = FAKTURY_DIR / company_slug(company["nazwa"])
     renderer = PdfRenderer(env) if fmt == "pdf" else None
 
+    log(f"Firma: {company['nazwa']} (NIP {company['nip']})")
     log(f"Środowisko: {env} ({base_url})")
-    log(f"NIP: {nip} | zakres dat: {date_from} .. {date_to} | dateType: {date_type} "
+    log(f"Zakres dat: {date_from} .. {date_to} | dateType: {date_type} "
         f"| tryb: {mode} | format: {fmt}")
 
-    client = KsefClient(base_url, nip, token)
+    client = KsefClient(base_url, company["nip"], company["token"])
     retry(client.authenticate)
 
     if mode in MODES_EXPORT:
-        total_found, total_new = run_export(client, date_from, date_to, date_type, fmt, renderer)
+        total_found, total_new = run_export(client, out_dir, date_from, date_to, date_type, fmt, renderer)
     else:
-        total_found, total_new = run_single(client, date_from, date_to, date_type, fmt, renderer)
+        total_found, total_new = run_single(client, out_dir, date_from, date_to, date_type, fmt, renderer)
 
-    # Łączna liczba faktur trzymanych na dysku (wszystkie dotychczas pobrane).
+    # Łączna liczba faktur firmy trzymanych na dysku.
     ext = "pdf" if fmt == "pdf" else "xml"
-    total_on_disk = sum(1 for _ in OUT_DIR.rglob(f"*.{ext}")) if OUT_DIR.exists() else 0
+    total_on_disk = sum(1 for _ in out_dir.rglob(f"*.{ext}")) if out_dir.exists() else 0
     log("=" * 60)
     log(f"Pobrano {total_found} faktur, nowych: {total_new} szt.")
-    log(f"Wszystkie faktury ({total_on_disk} szt.) trzymane są w folderze: {OUT_DIR}")
+    log(f"Wszystkie faktury firmy {company['nazwa']} ({total_on_disk} szt.) "
+        f"w folderze: {out_dir}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,23 @@
+{
+  "_uwaga": "Skopiuj do firmy.json i uzupełnij. NIE commituj firmy.json (zawiera tokeny!).",
+  "firmy": [
+    {
+      "nazwa": "Moja Firma",
+      "nip": "8792408754",
+      "token": "TU-WKLEJ-TOKEN-KSeF",
+      "env": "prod"
+    },
+    {
+      "nazwa": "Druga Sp. z o.o.",
+      "nip": "5260250995",
+      "token": "TU-WKLEJ-TOKEN-KSeF",
+      "env": "prod"
+    },
+    {
+      "nazwa": "Testowa (demo)",
+      "nip": "1111111111",
+      "token": "TU-WKLEJ-TOKEN-DEMO",
+      "env": "demo"
+    }
+  ]
+}
