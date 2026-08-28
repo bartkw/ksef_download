@@ -3,21 +3,21 @@
   "firmy": [
     {
       "nazwa": "Moja Firma",
-      "nip": "8792408754",
+      "nip": "1111111111",
       "token": "TU-WKLEJ-TOKEN-KSeF",
       "env": "prod"
     },
     {
       "nazwa": "Druga Sp. z o.o.",
-      "nip": "5260250995",
+      "nip": "2222222222",
       "token": "TU-WKLEJ-TOKEN-KSeF",
       "env": "prod"
     },
     {
       "nazwa": "Testowa (demo)",
-      "nip": "1111111111",
+      "nip": "3333333333",
       "token": "TU-WKLEJ-TOKEN-DEMO",
-      "env": "demo"
+      "env": "demo"  #zmien na prod w razie potrzeby
     }
   ]
 }
