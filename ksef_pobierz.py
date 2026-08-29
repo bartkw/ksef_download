@@ -20,6 +20,10 @@ wielkość liter w polach JSON warto potwierdzić ze Swaggerem danego środowisk
 Wszystkie miejsca do ewentualnej korekty są zebrane w sekcji KONFIGURACJA.
 """
 
+# Adnotacje typów jako łańcuchy — pozwala używać składni `str | None` również
+# na Pythonie 3.9 (PEP 604 działa natywnie dopiero od 3.10).
+from __future__ import annotations
+
 import argparse
 import base64
 import csv
@@ -918,18 +922,33 @@ class PdfRenderer:
         job_path.write_text(json.dumps({"items": items}), encoding="utf-8")
         if result_path.exists():
             result_path.unlink()
+        # Hojny timeout: pierwsze uruchomienie Node (transpilacja TS + jsdom) bywa
+        # wolne, zwłaszcza gdy projekt leży w iCloud/OneDrive. Można nadpisać
+        # zmienną KSEF_PDF_TIMEOUT (sekundy).
+        env_to = os.environ.get("KSEF_PDF_TIMEOUT")
+        timeout_s = int(env_to) if (env_to and env_to.isdigit()) else max(600, 30 * len(items))
+        proc = None
         try:
             proc = subprocess.run(
                 [self._node, PDF_CLI, "job.json"],
                 cwd=str(self.vendor_dir),
                 capture_output=True, encoding="utf-8", errors="replace",
-                timeout=max(120, 15 * len(items)),
+                timeout=timeout_s,
             )
+        except subprocess.TimeoutExpired:
+            log(f"    BŁĄD: generator PDF przekroczył {timeout_s}s ({len(items)} faktur) — "
+                f"pomijam PDF w tym przebiegu (spróbuje ponownie następnym razem).")
+            log("    Wskazówka: jeśli projekt jest w iCloud Drive / OneDrive, przenieś go do "
+                "zwykłego folderu lokalnego — node_modules w chmurze działają bardzo wolno. "
+                "Timeout można zmienić zmienną KSEF_PDF_TIMEOUT.")
+            return {}
         finally:
             if job_path.exists():
                 job_path.unlink()
         if not result_path.exists():
-            sys.exit(f"[BŁĄD] Generator PDF nie zwrócił wyniku.\n{proc.stderr[-1500:]}")
+            tail = (proc.stderr or "")[-1500:] if proc else ""
+            log(f"    BŁĄD: generator PDF nie zwrócił wyniku — pomijam PDF w tym przebiegu.\n{tail}")
+            return {}
         data = json.loads(result_path.read_text(encoding="utf-8"))
         result_path.unlink()
         out = {}

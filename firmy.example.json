@@ -1,5 +1,5 @@
 {
-  "_uwaga": "Skopiuj do firmy.json i uzupełnij. NIE commituj firmy.json (zawiera tokeny!).",
+  "_uwaga": "Skopiuj do firmy.json i uzupełnij. NIE commituj firmy.json (zawiera tokeny!). Pole env: prod | demo | test. JSON nie dopuszcza komentarzy.",
   "firmy": [
     {
       "nazwa": "Moja Firma",
@@ -17,7 +17,7 @@
       "nazwa": "Testowa (demo)",
       "nip": "3333333333",
       "token": "TU-WKLEJ-TOKEN-DEMO",
-      "env": "demo"  #zmien na prod w razie potrzeby
+      "env": "demo"
     }
   ]
 }
